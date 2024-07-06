@@ -11,7 +11,11 @@ Finally, it will stich together the stories into a movie.
 
 1. Set up the ENV using the example .env file.
 
-2. Initialize a sqlite db and run migrations. This should match the env.
+2. Initialize a sqlite db and run migrations. This should match the env. Run migrations with sqlx.
+
+```
+sqlx migrate run
+```
 
 3. Create an empty stories directory in this folder.
 
