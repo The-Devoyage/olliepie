@@ -9,6 +9,7 @@ from vertexai.preview.vision_models import ImageGenerationModel
 from dotenv import load_dotenv
 load_dotenv()
 
+# NOTE: Not used yet, but will be used for a CLI interface
 @click.command()
 @click.option('--generate', is_flag=True, help='Generate a new chapter')
 
