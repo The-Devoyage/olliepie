@@ -21,8 +21,15 @@ def main(generate):
     # Set the prompt for the generative model
     prompt = get_prompts()
 
+    # Get the outline
+    outline = create_outline()
+
+    outline_with_prompt = (
+        prompt[0] + " " + prompt[1] + " " + prompt[2] + " " + prompt[3] + " ",
+        f"Write a whimsical children's story based on the following outline: {outline}"
+    )
     # Generate the content
-    story = generate_text(prompt)
+    story = generate_text(outline_with_prompt)
 
     # Save the response to a text file with todays date
     story_path = save_story(story)
@@ -31,13 +38,13 @@ def main(generate):
     story_id = insert_story(story)
 
     # Generate the title image
-    generate_title_image(story_id, story_path, prompt)
+    create_title_image(story_id, story_path)
 
     # Get the audio
-    content_to_audio(story_id, story_path)
+    create_audio(story_id, story_path)
 
     # Get the images
-    generate_content_images(story_id, story_path)
+    create_content_images(story_id, story_path)
 
     # Generate the video
     stitch_video(story_id, story_path)
@@ -48,6 +55,34 @@ def main(generate):
     else:
         print('No flag set')
 
+# Use AI to create an outline based on the prompts
+def create_outline():
+    logger.info('Creating Outline')
+    outline = (
+        "Introduction - 5 - 8 scenes: "
+        "The characters are introduced and the setting is established. "
+        "Establish the characters' personalities and relationships. "
+        "Introduce the idea of an adventure and a location to travel to. "
+        "Begin Story - 8 - 10 scenes: "
+        "The characters embark on their adventure using their method of transportation. "
+        "Once arrivving, they should take time to explore the location and meet new friends. "
+        "Conflict - 10 - 15 scenes: "
+        "One of their new friends should have a problem that requires math, science, and critical thinking to solve. "
+        "The problem should be elaborate and descriptive. "
+        "The characters should work together to create a plan solve the problem. "
+        "The plan should be separated into logical steps in order to solve it. "
+        "Body - 10 - 15 scenes: "
+        "The characters should start to implement their plan and face challenges along the way. "
+        "Ensure there is a scene for each step of the plan. "
+        "Each character should take a turn to solve a part of the problem. "
+        "Resolution - 5 - 8 scenes: "
+        "The characters should successfully solve the problem and learn a lesson from the experience. "
+        "The main characters should reflect on the adventure and the problem they solved. "
+        "The main characters should say goodbye to their new friends and return home. "
+    )
+    return outline
+
+
 
 def get_prompts():
     logger.info('Getting Prompts')
@@ -56,12 +91,12 @@ def get_prompts():
         "You are a storyteller. Tell a short story appropriate for children aged 1-3 years old. "
         "It should be funny, sad, or adventurous. "
         "The story is one part of a series, so the audience will be familiar with the characters. "
-        # "You don't need to introduce the characters but you can reference their names. "
         "Use simple and suitable language for children aged 1-3 years old. "
         "Each time a new page starts, insert [PAGE] to indicate the start of a new page. "
         "Make sure there is a new line before and after [PAGE]. The story should have at least 10 pages."
         "Each page should have 1-3 sentences and have an subject that can be illustrated by an image."
         "The story should be cohesive and have a beginning, middle, and end. The story line should be easy to follow and logical."
+        "Take time to develop each part of the story."
     )
 
     characters_prompt = (
@@ -121,7 +156,7 @@ def insert_story(story):
     return story_id
 
 # Generate audio files for story
-def content_to_audio(story_id, story_dir):
+def create_audio(story_id, story_dir):
     logger.info('Generating Audio for Content')
 
     conn, c = get_db_connection()
@@ -131,7 +166,18 @@ def content_to_audio(story_id, story_dir):
     rows = c.fetchall()
 
     for row in rows:
-        response = generate_audio(row[1])
+        response = None
+
+        attempts = 0
+
+        while not response and attempts < 3:
+            attempts += 1
+            response = generate_audio(row[1])
+
+        if not response:
+            logger.error(f"Failed to generate audio for content {row[0]}")
+            exit(1)
+
         file_name = f"{story_dir}/content-{row[0]}.mp3"
         with open(file_name, "wb") as out:
             out.write(response)
@@ -140,7 +186,7 @@ def content_to_audio(story_id, story_dir):
     conn.commit()
     conn.close()
 
-def generate_title_image(story_id, story_dir, context):
+def create_title_image(story_id, story_dir):
     logger.info('Generating Title Image')
 
     conn, c = get_db_connection()
@@ -148,6 +194,8 @@ def generate_title_image(story_id, story_dir, context):
     # Get all the content for the story
     c.execute("SELECT content FROM story_content WHERE story_id = ?", (story_id,))
     rows = c.fetchall()
+
+    context = get_prompts()
 
     prompt = (
         "You are an prompt engineer writing a prompt to generate images for a whimsical children's storybook."
@@ -160,12 +208,17 @@ def generate_title_image(story_id, story_dir, context):
 
     image_prompt = generate_text(prompt)
 
-    # image = generate_image(image_prompt)
-
     image = None
 
-    while not image:
+    attempts = 0
+
+    while not image and attempts < 3:
+        attempts += 1
         image = generate_image(image_prompt)
+
+    if not image:
+        logger.error("Failed to generate image for title page")
+        exit(1)
 
     output_file = f"{story_dir}/title.png"
     image.save(location=output_file, include_generation_parameters=False)
@@ -175,7 +228,7 @@ def generate_title_image(story_id, story_dir, context):
     conn.commit()
     conn.close()
 
-def generate_content_images(story_id, story_dir):
+def create_content_images(story_id, story_dir):
     logger.info('Generating Content Images')
 
     conn, c = get_db_connection()
@@ -186,27 +239,39 @@ def generate_content_images(story_id, story_dir):
     prompts = get_prompts();
     characters_prompt = prompts[1]
 
+    print("CHARACTERS PROMPT " + characters_prompt)
+
     for row in rows:
         prompt = (
             "You are an prompt engineer writing a prompt to generate images for a whimsical children's storybook." 
             "Write a prompt to generate an image for the following scene of a whimiscal children's storybook."
-            "The image does not need to include the characters but should capture the essence of the scene."
-            "If the scene includes characters, it should only include the characters mentioned in the background information."
             "The image should be colorful, engaging, and whimsical. The image should be drawn, painted, or illustrated."
-            f"Background Information: ```{characters_prompt}```\n"
+            "Prompt should include Subject, Style, Setting, Background Scene, Foreground Scene, Feeling, and Characters."
+            f"Character Context: ```{characters_prompt}```\n"
             f"Scene: ```{row[1]}``` End Scene"
         )
 
         image_prompt = generate_text(prompt)
 
-        print("IMAGE" + image_prompt)
+        if not image_prompt:
+            logger.error(f"Failed to generate image prompt for content {row[0]}")
+            exit(1)
+
+        print("IMAGE PROMPT " + image_prompt)
 
         output_file = f"{story_dir}/content-img-{row[0]}.png"
 
+        attempts = 0
+
         image = None
 
-        while not image:
+        while not image and attempts < 3:
+            attempts += 1
             image = generate_image(image_prompt)
+
+        if not image:
+            logger.error(f"Failed to generate image for content {row[0]}")
+            exit(1)
 
         image.save(location=output_file, include_generation_parameters=False)
 
@@ -258,6 +323,8 @@ def stitch_video(story_id, path):
         clip_path = f"{path}/content-video-{row[0]}.mp4"
         video.write_videofile(clip_path, codec="libx264", audio_codec="aac", fps=24)
         clips.append(VideoFileClip(clip_path))
+        # transition_clip = ImageClip(row[2]).set_duration(1)
+        # clips.append(transition_clip)
 
     final_clip = concatenate_videoclips(clips)
     final_clip_path = f"{path}/final.mp4"

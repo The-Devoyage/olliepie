@@ -11,9 +11,13 @@ def generate_text(prompt):
     logger.info(f"Generating text for prompt")
     google_api_key = os.getenv('GOOGLE_API_KEY')
     genai.configure(api_key=google_api_key)
-    model = genai.GenerativeModel('gemini-1.5-pro-001')
-    response = model.generate_content(prompt)
-    return response.text
+    try:
+        model = genai.GenerativeModel('gemini-1.5-pro-001')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        return None
 
 def generate_audio(text):
     logger.info(f"Generating audio for text")
@@ -27,10 +31,14 @@ def generate_audio(text):
         audio_encoding=texttospeech.AudioEncoding.MP3,
         speaking_rate=0.65
     )
-    response = client.synthesize_speech(
-        request={"input": input_text, "voice": voice, "audio_config": audio_config}
-    )
-    return response.audio_content
+    try:
+        response = client.synthesize_speech(
+            request={"input": input_text, "voice": voice, "audio_config": audio_config}
+        )
+        return response.audio_content
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        return None
 
 def generate_image(prompt):
     logger.info(f"Generating image for prompt")
