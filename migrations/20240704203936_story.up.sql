@@ -2,6 +2,7 @@
 CREATE TABLE story (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
+    title_image_path TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

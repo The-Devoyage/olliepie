@@ -1,37 +1,46 @@
-import google.generativeai as genai
 import datetime
 import click
-import sqlite3
 import os
-from google.cloud import texttospeech
-import vertexai
-from vertexai.preview.vision_models import ImageGenerationModel
 from dotenv import load_dotenv
+from genisis.generate import generate_text, generate_audio, generate_image
+from moviepy.editor import ImageClip, AudioFileClip, VideoFileClip, concatenate_videoclips
+from database.utils import get_db_connection
+import logging
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', filename='log.log')
+logger = logging.getLogger(__name__)
 
 # NOTE: Not used yet, but will be used for a CLI interface
 @click.command()
 @click.option('--generate', is_flag=True, help='Generate a new chapter')
 
 def main(generate):
+    logger.info('Generating Story')
 
     # Set the prompt for the generative model
     prompt = get_prompts()
 
     # Generate the content
-    story_response = generate_text(prompt)
+    story = generate_text(prompt)
 
     # Save the response to a text file with todays date
-    story_dir = save_story(story_response)
+    story_path = save_story(story)
 
     # Save the story to a database
-    story_id = insert_story(story_response)
+    story_id = insert_story(story)
+
+    # Generate the title image
+    generate_title_image(story_id, story_path, prompt)
 
     # Get the audio
-    generate_audio(story_id, story_dir)
+    content_to_audio(story_id, story_path)
 
     # Get the images
-    generate_images(story_id, story_dir)
+    generate_content_images(story_id, story_path)
+
+    # Generate the video
+    stitch_video(story_id, story_path)
 
     # Check if the generate flag is set
     if generate:
@@ -39,24 +48,20 @@ def main(generate):
     else:
         print('No flag set')
 
-# Generate text using the generative model
-def generate_text(prompt):
-    google_api_key = os.getenv('GOOGLE_API_KEY')
-    genai.configure(api_key=google_api_key)
-    model = genai.GenerativeModel('gemini-1.0-pro-latest')
-    response = model.generate_content(prompt)
-    return response.text
 
 def get_prompts():
+    logger.info('Getting Prompts')
+
     designation_prompt = (
-        "You are a storyteller. Tell a short story appropriate for children aged 2-6 years old. "
-        "The story should be the length of a short children's book. "
-        "It can be funny, sad, or adventurous. "
+        "You are a storyteller. Tell a short story appropriate for children aged 1-3 years old. "
+        "It should be funny, sad, or adventurous. "
         "The story is one part of a series, so the audience will be familiar with the characters. "
-        "You don't need to introduce them but can reference their names. "
-        "Use simple and suitable language for children aged 2-6 years old. "
+        # "You don't need to introduce the characters but you can reference their names. "
+        "Use simple and suitable language for children aged 1-3 years old. "
         "Each time a new page starts, insert [PAGE] to indicate the start of a new page. "
-        "Make sure there is a new line before and after [PAGE]. The story should have at least 5 pages."
+        "Make sure there is a new line before and after [PAGE]. The story should have at least 10 pages."
+        "Each page should have 1-3 sentences and have an subject that can be illustrated by an image."
+        "The story should be cohesive and have a beginning, middle, and end. The story line should be easy to follow and logical."
     )
 
     characters_prompt = (
@@ -93,6 +98,8 @@ def get_prompts():
 
 # Separate the story into scenes/paragraphs and save to a sqlite database
 def insert_story(story):
+    logger.info('Inserting Story')
+
     conn, c = get_db_connection()
 
     title = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -114,68 +121,67 @@ def insert_story(story):
     return story_id
 
 # Generate audio files for story
-def generate_audio(story_id, story_dir):
+def content_to_audio(story_id, story_dir):
+    logger.info('Generating Audio for Content')
+
     conn, c = get_db_connection()
 
     c.execute("SELECT id, content FROM story_content WHERE story_id = ?", (story_id,))
 
     rows = c.fetchall()
 
-    client = texttospeech.TextToSpeechClient()
-
     for row in rows:
-        input_text= texttospeech.SynthesisInput(text=row[1])
-
-        voice = texttospeech.VoiceSelectionParams(
-            language_code="en-US",
-            name="en-US-Studio-O",
-        )
-
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP3,
-            speaking_rate=0.65
-        )
-
-        response = client.synthesize_speech(
-            request={"input": input_text, "voice": voice, "audio_config": audio_config}
-        )
-
+        response = generate_audio(row[1])
         file_name = f"{story_dir}/content-{row[0]}.mp3"
-
         with open(file_name, "wb") as out:
-            out.write(response.audio_content)
-
+            out.write(response)
         c.execute("UPDATE story_content SET audio_path = ? WHERE id = ?", (file_name, row[0]))
 
     conn.commit()
     conn.close()
 
-def get_db_connection():
-    db = os.getenv('DATABASE_URL')
+def generate_title_image(story_id, story_dir, context):
+    logger.info('Generating Title Image')
 
-    if not db:
-        print("No database URL found. Exiting get_db_connection function.")
-        exit()
+    conn, c = get_db_connection()
 
-    # Trim the sqlite:// prefix
-    if db.startswith("sqlite://"):
-        db = db[9:]
+    # Get all the content for the story
+    c.execute("SELECT content FROM story_content WHERE story_id = ?", (story_id,))
+    rows = c.fetchall()
 
-    conn = sqlite3.connect(db)
-    c = conn.cursor()
+    prompt = (
+        "You are an prompt engineer writing a prompt to generate images for a whimsical children's storybook."
+        "Write a prompt to generate an image for the title page of a whimsical children's storybook."
+        "The image should capture the essence of the story and be suitable for children aged 2-6 years old."
+        "The image should be colorful, engaging, and whimsical."
+        f"Background Information: ```{context}```\n"
+        f"Story: ```{rows}``` End Story"
+    )
 
-    return conn, c
+    image_prompt = generate_text(prompt)
 
-def generate_images(story_id, story_dir):
+    # image = generate_image(image_prompt)
+
+    image = None
+
+    while not image:
+        image = generate_image(image_prompt)
+
+    output_file = f"{story_dir}/title.png"
+    image.save(location=output_file, include_generation_parameters=False)
+
+    c.execute("UPDATE story SET title_image_path = ? WHERE id = ?", (output_file, story_id))
+
+    conn.commit()
+    conn.close()
+
+def generate_content_images(story_id, story_dir):
+    logger.info('Generating Content Images')
+
     conn, c = get_db_connection()
 
     c.execute("SELECT id, content FROM story_content WHERE story_id = ?", (story_id,))
     rows = c.fetchall()
-
-    project_id = os.getenv('PROJECT_ID')
-    vertexai.init(project=project_id, location="us-central1")
-    model = ImageGenerationModel.from_pretrained("imagegeneration@006")
-    # model = ImageGenerationModel.from_pretrained("stabilityai_stable-diffusion-2-1-1720235813321")
 
     prompts = get_prompts();
     characters_prompt = prompts[1]
@@ -185,6 +191,8 @@ def generate_images(story_id, story_dir):
             "You are an prompt engineer writing a prompt to generate images for a whimsical children's storybook." 
             "Write a prompt to generate an image for the following scene of a whimiscal children's storybook."
             "The image does not need to include the characters but should capture the essence of the scene."
+            "If the scene includes characters, it should only include the characters mentioned in the background information."
+            "The image should be colorful, engaging, and whimsical. The image should be drawn, painted, or illustrated."
             f"Background Information: ```{characters_prompt}```\n"
             f"Scene: ```{row[1]}``` End Scene"
         )
@@ -195,20 +203,12 @@ def generate_images(story_id, story_dir):
 
         output_file = f"{story_dir}/content-img-{row[0]}.png"
 
-        images = model.generate_images(
-            prompt=image_prompt,
-            number_of_images=1,
-            language="en",
-            aspect_ratio="1:1",
-            safety_filter_level="block_some",
-            person_generation="allow_adult",
-        )
+        image = None
 
-        if not images:
-            print("No images generated")
-            continue
+        while not image:
+            image = generate_image(image_prompt)
 
-        images[0].save(location=output_file, include_generation_parameters=False)
+        image.save(location=output_file, include_generation_parameters=False)
 
         c.execute("UPDATE story_content SET image_path = ? WHERE id = ?", (output_file, row[0]))
 
@@ -217,6 +217,8 @@ def generate_images(story_id, story_dir):
 
 # Save the story to a text file in the stories directory
 def save_story(story):
+    logger.info('Saving Story')
+
     date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     directory = f"stories/{date}"
@@ -228,6 +230,40 @@ def save_story(story):
         f.write(story)
 
     return directory
+
+# Generate video by stitching together images and audio
+def stitch_video(story_id, path):
+    logger.info('Stitching Video')
+
+    # use ffmpeg to stitch together images and audio
+    conn, c = get_db_connection()
+
+    # Get the title image
+    c.execute("SELECT title_image_path FROM story WHERE id = ?", (story_id,))
+    story = c.fetchone()
+
+    # Get all the content for the story
+    c.execute("SELECT id, audio_path, image_path FROM story_content WHERE story_id = ?", (story_id,))
+    story_contents = c.fetchall()
+
+    clips = []
+
+    title = ImageClip(story[0]).set_duration(5)
+    clips.append(title)
+
+    for row in story_contents:
+        audio = AudioFileClip(row[1])
+        image = ImageClip(row[2]).set_duration(audio.duration)
+        video = image.set_audio(audio)
+        clip_path = f"{path}/content-video-{row[0]}.mp4"
+        video.write_videofile(clip_path, codec="libx264", audio_codec="aac", fps=24)
+        clips.append(VideoFileClip(clip_path))
+
+    final_clip = concatenate_videoclips(clips)
+    final_clip_path = f"{path}/final.mp4"
+    final_clip.write_videofile(final_clip_path, codec="libx264", audio_codec="aac", fps=24)
+
+    conn.close()
 
 if __name__ == '__main__':
     main()
