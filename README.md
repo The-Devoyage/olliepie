@@ -11,15 +11,18 @@ Finally, it will stich together the stories into a movie.
 
 1. Set up the ENV using the example .env file.
 
-2. Initialize a sqlite db and run migrations. This should match the env. Run migrations with sqlx.
+2. Look at the imports and install dependenices using pip that are not present on your system. Eventually,
+this will be automated in a virtual env.
+
+3. Initialize a sqlite db and run migrations. This should match the env. Run migrations with sqlx.
 
 ```
 sqlx migrate run
 ```
 
-3. Create an empty stories directory in this folder.
+4. Create an empty stories directory in this folder. Eventually, this will be created if not exists.
 
-3. Run using python. 
+5. Run using python. 
 
 ```
 python3 ./main.py
