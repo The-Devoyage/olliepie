@@ -2,13 +2,14 @@ import datetime
 import click
 import os
 from dotenv import load_dotenv
-from genisis.generate import generate_text, generate_audio, generate_image
-from moviepy.editor import ImageClip, AudioFileClip, VideoFileClip, concatenate_videoclips
+from google.generate import generate_text, generate_audio, generate_image
+from moviepy.editor import ImageClip, AudioFileClip, VideoFileClip, concatenate_videoclips, CompositeAudioClip
+from moviepy.audio.fx import audio_loop
 from database.utils import get_db_connection
 import logging
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', filename='log.log')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', filename='run.log')
 logger = logging.getLogger(__name__)
 
 # NOTE: Not used yet, but will be used for a CLI interface
@@ -59,15 +60,19 @@ def main(generate):
 def create_outline():
     logger.info('Creating Outline')
     outline = (
+        # Commented out for testing purposes
+        # "NO MATTER WHAT, ONLY GENERATE ONE SCENES AS THIS IS A TEST\n"
         "Introduction - 5 - 8 scenes: "
         "The characters are introduced and the setting is established. "
         "Establish the characters' personalities and relationships. "
         "Introduce the idea of an adventure and a location to travel to. "
+        "Should be funny, engaging, and possibly tell jokes or unique scenarios."
         "Begin Story - 8 - 10 scenes: "
         "The characters embark on their adventure using their method of transportation. "
         "Once arrivving, they should take time to explore the location and meet new friends. "
+        "Take time to describe the new friends and their personalities. "
         "Conflict - 10 - 15 scenes: "
-        "One of their new friends should have a problem that requires math, science, and critical thinking to solve. "
+        "One of their new friends should have a problem that requires math, science, or critical thinking to solve. "
         "The problem should be elaborate and descriptive. "
         "The characters should work together to create a plan solve the problem. "
         "The plan should be separated into logical steps in order to solve it. "
@@ -79,6 +84,10 @@ def create_outline():
         "The characters should successfully solve the problem and learn a lesson from the experience. "
         "The main characters should reflect on the adventure and the problem they solved. "
         "The main characters should say goodbye to their new friends and return home. "
+        "Conclusion - 3 - 6 scenes: "
+        "The characters should return home and reflect on the adventure. "
+        "The characters should discuss the lesson they learned and how they can apply it to their lives. "
+        "The characters should plan their next adventure and the story should end on a cliffhanger."
     )
     return outline
 
@@ -239,7 +248,7 @@ def create_content_images(story_id, story_dir):
     prompts = get_prompts();
     characters_prompt = prompts[1]
 
-    print("CHARACTERS PROMPT " + characters_prompt)
+    previous_prompts = []
 
     for row in rows:
         prompt = (
@@ -247,17 +256,23 @@ def create_content_images(story_id, story_dir):
             "Write a prompt to generate an image for the following scene of a whimiscal children's storybook."
             "The image should be colorful, engaging, and whimsical. The image should be drawn, painted, or illustrated."
             "Prompt should include Subject, Style, Setting, Background Scene, Foreground Scene, Feeling, and Characters."
+            "Use the character context, previous image prompts, and following scene to write the prompt for the image."
+            "Explicitly describe each character and scene in verbose detail. Do not summarize or use general terms."
+            "Never show people in the image."
             f"Character Context: ```{characters_prompt}```\n"
-            f"Scene: ```{row[1]}``` End Scene"
+            f"Previous Image Prompts: ```{previous_prompts}``` End Previous Image Prompts\n"
+            f"Write a prompt for the following scene: ```{row[1]}``` End Scene"
         )
 
         image_prompt = generate_text(prompt)
+
+        previous_prompts.append(image_prompt)
 
         if not image_prompt:
             logger.error(f"Failed to generate image prompt for content {row[0]}")
             exit(1)
 
-        print("IMAGE PROMPT " + image_prompt)
+        print("IMAGE PROMPT IS: ", image_prompt)
 
         output_file = f"{story_dir}/content-img-{row[0]}.png"
 
@@ -323,10 +338,14 @@ def stitch_video(story_id, path):
         clip_path = f"{path}/content-video-{row[0]}.mp4"
         video.write_videofile(clip_path, codec="libx264", audio_codec="aac", fps=24)
         clips.append(VideoFileClip(clip_path))
-        # transition_clip = ImageClip(row[2]).set_duration(1)
-        # clips.append(transition_clip)
+        transition_clip = ImageClip(row[2]).set_duration(1)
+        clips.append(transition_clip)
 
     final_clip = concatenate_videoclips(clips)
+    background_audio = AudioFileClip("assets/lullaby.mp3")
+    background_audio = audio_loop.audio_loop(background_audio, duration=final_clip.duration).volumex(0.075)
+    final_audio = CompositeAudioClip([final_clip.audio, background_audio])
+    final_clip = final_clip.set_audio(final_audio)
     final_clip_path = f"{path}/final.mp4"
     final_clip.write_videofile(final_clip_path, codec="libx264", audio_codec="aac", fps=24)
 

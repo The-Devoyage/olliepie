@@ -20,12 +20,15 @@ def generate_text(prompt):
         return None
 
 def generate_audio(text):
-    logger.info(f"Generating audio for text")
+    text = text.replace("[PAGE]", "")
+    text = text.replace("\n", " ")
+    logger.info(f"Generating audio for text: " + text)
     client = texttospeech.TextToSpeechClient()
     input_text = texttospeech.SynthesisInput(text=text)
     voice = texttospeech.VoiceSelectionParams(
         language_code="en-US",
-        name="en-US-Studio-O",
+        # name="en-US-Studio-O",
+        name="en-US-Journey-F",
     )
     audio_config = texttospeech.AudioConfig(
         audio_encoding=texttospeech.AudioEncoding.MP3,
