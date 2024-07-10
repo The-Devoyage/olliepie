@@ -25,5 +25,5 @@ sqlx migrate run
 5. Run using python. 
 
 ```
-python3 ./main.py
+python3 ./main.py --help
 ```

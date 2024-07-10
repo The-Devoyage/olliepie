@@ -6,19 +6,36 @@ from google.generate import generate_text, generate_audio, generate_image
 from moviepy.editor import ImageClip, AudioFileClip, VideoFileClip, concatenate_videoclips, CompositeAudioClip
 from moviepy.audio.fx import audio_loop
 from database.utils import get_db_connection
+from utils.parse import check_env_vars, get_config
+from database.execute import insert_story
 import logging
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', filename='run.log')
+logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(asctime)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # NOTE: Not used yet, but will be used for a CLI interface
 @click.command()
-@click.option('--generate', is_flag=True, help='Generate a new chapter')
+@click.option('--new', is_flag=True, help='Generate a new chapter')
+@click.option('--prompt', is_flag=True, help='Generate a new prompt')
+@click.help_option('-h', '--help')
 
-def main(generate):
+def main(new, prompt):
     logger.info('Generating Story')
 
+    if check_env_vars() == False:
+        logger.error("Missing required environment variables")
+        exit(1)
+
+    if new:
+        new_story()
+    if prompt:
+        result = get_prompts()
+        print(result)
+    else:
+        print("Use --help to see available options")
+
+def new_story():
     # Set the prompt for the generative model
     prompt = get_prompts()
 
@@ -50,44 +67,37 @@ def main(generate):
     # Generate the video
     stitch_video(story_id, story_path)
 
-    # Check if the generate flag is set
-    if generate:
-        print('Generating a new chapter')
-    else:
-        print('No flag set')
-
 # Use AI to create an outline based on the prompts
 def create_outline():
     logger.info('Creating Outline')
     outline = (
         # Commented out for testing purposes
-        # "NO MATTER WHAT, ONLY GENERATE ONE SCENES AS THIS IS A TEST\n"
+        # "NO MATTER WHAT, ONLY GENERATE ONE SCENE AS THIS IS A TEST\n"
         "Introduction - 5 - 8 scenes: "
         "The characters are introduced and the setting is established. "
         "Establish the characters' personalities and relationships. "
-        "Introduce the idea of an adventure and a location to travel to. "
-        "Should be funny, engaging, and possibly tell jokes or unique scenarios."
+        "Introduce the plot and foreshadow problem the characters will face."
         "Begin Story - 8 - 10 scenes: "
-        "The characters embark on their adventure using their method of transportation. "
-        "Once arrivving, they should take time to explore the location and meet new friends. "
+        "The characters embark the next stage of their adventure."
         "Take time to describe the new friends and their personalities. "
         "Conflict - 10 - 15 scenes: "
-        "One of their new friends should have a problem that requires math, science, or critical thinking to solve. "
+        "Introduce the problem the characters will face."
         "The problem should be elaborate and descriptive. "
         "The characters should work together to create a plan solve the problem. "
         "The plan should be separated into logical steps in order to solve it. "
         "Body - 10 - 15 scenes: "
-        "The characters should start to implement their plan and face challenges along the way. "
-        "Ensure there is a scene for each step of the plan. "
-        "Each character should take a turn to solve a part of the problem. "
+        "The characters should start to implement their plan to solve the problem and face challenges along the way."
+        "Ensure there is a scene/page for each step of the plan to solve the problem."
+        "Each character should take a turn to solve a part of the problem."
+        "Each stage of the plan should be detailed and descriptive."
         "Resolution - 5 - 8 scenes: "
-        "The characters should successfully solve the problem and learn a lesson from the experience. "
+        "The characters should successfully solve the problem and reflect on the experience. "
         "The main characters should reflect on the adventure and the problem they solved. "
-        "The main characters should say goodbye to their new friends and return home. "
+        "The main characters should part ways in a memorable way."
         "Conclusion - 3 - 6 scenes: "
-        "The characters should return home and reflect on the adventure. "
-        "The characters should discuss the lesson they learned and how they can apply it to their lives. "
+        "The characters should discuss the lesson they learned and how they can apply it to their lives."
         "The characters should plan their next adventure and the story should end on a cliffhanger."
+        "End the story in a traditional way, such as 'The End' or 'To Be Continued"
     )
     return outline
 
@@ -96,73 +106,53 @@ def create_outline():
 def get_prompts():
     logger.info('Getting Prompts')
 
+    config = get_config()
+
+    if not config:
+        logger.error("Failed to get config")
+        exit(1)
+
     designation_prompt = (
-        "You are a storyteller. Tell a short story appropriate for children aged 1-3 years old. "
-        "It should be funny, sad, or adventurous. "
-        "The story is one part of a series, so the audience will be familiar with the characters. "
-        "Use simple and suitable language for children aged 1-3 years old. "
-        "Each time a new page starts, insert [PAGE] to indicate the start of a new page. "
+        "You are a storyteller. Tell a short story appropriate for children aged 1-3 years old."
+        "It should be funny, sad, or adventurous."
+        "The story is one part of a series, so the audience will be familiar with the characters."
+        "Introduce the characters when needed, but no need to introduce in detail."
+        "Use simple and suitable language for children aged 1-3 years old."
+        "Each time a new page starts, insert [PAGE] to indicate the start of a new page."
         "Make sure there is a new line before and after [PAGE]. The story should have at least 10 pages."
         "Each page should have 1-3 sentences and have an subject that can be illustrated by an image."
         "The story should be cohesive and have a beginning, middle, and end. The story line should be easy to follow and logical."
         "Take time to develop each part of the story."
     )
 
-    characters_prompt = (
-        "Characters: Bongo, Oakley, and Steve. "
-        "Bongo: "
-        "Bongo is an 11-year-old, 70-pound Bernese Mountain Dog. He is mostly black and loves to swim and play fetch. "
-        "He runs fast, gets very excited at the lake, and is easygoing otherwise. "
-        "He can be a bit vocal, especially when excited. "
-        "Oakley: "
-        "Oakley is a 6-year-old, 110-pound Bernese Mountain Dog with a white 'Swiss kiss' on the back of his neck. "
-        "He is more reserved than Bongo but very loyal and loves his toys. "
-        "Oakley enjoys the lake, adventures, food, naps, and belly rubs. "
-        "He can be grouchy at night and loves chasing squirrels, particularly his nemesis, Steve. "
-        "Bongo and Oakley are best friends, playing alongside each other but not together. They are very loyal to each other."
-    )
+    characters_prompt = ""
+    characters = config.get("characters")
+    if isinstance(characters, dict):
+        characters_descriptions = characters.get("descriptions")
+        if characters_descriptions:
+            characters_prompt = " ".join(characters_descriptions)
 
-    setting_prompt = (
-        "The story takes place at Bongo and Oakley's house in a forest by a lake. "
-        "The house is a cozy cabin with a fireplace, a big yard, and a dock leading to the lake. "
-        "Neighboring towns offer plenty of opportunities for adventure, such as skiing, hiking, swimming, learning, and playing. "
-        "There is a train station nearby that can take them to faraway places for adventures."
-    )
+    notes_prompt = ""
+    notes = config.get("notes") 
+    if isinstance(notes, dict):
+        notes_descriptions = notes.get("descriptions")
+        if notes_descriptions:
+            notes = " ".join(notes_descriptions)
 
-    plot_prompt = (
-        "Bongo and Oakley first choose a real-world destination to travel to, so children can learn about different places. "
-        "They embark on an adventure suitable for the chosen location. "
-        "Along the way, they encounter a problem that requires math, science, and critical thinking to solve. "
-        "The problem should be solved by the end of the story, making children think about how they would solve it. "
-        "During their adventure, they face various challenges and make new friends. "
-        "The story should have a happy ending and a moral or lesson appropriate for children aged 2-6 years old, without explicitly stating the moral at the end."
-    )
 
-    return (designation_prompt, characters_prompt, setting_prompt, plot_prompt)
+    plot_prompt = ""
+    plot = config.get("plot")
+    if isinstance(plot, dict):
+        plot_descriptions = plot.get("descriptions")
+        if plot_descriptions:
+            plot_prompt = " ".join(plot_descriptions)
 
-# Separate the story into scenes/paragraphs and save to a sqlite database
-def insert_story(story):
-    logger.info('Inserting Story')
+    if not characters_prompt and not notes_prompt and not plot_prompt:
+        logger.error("Missing required prompts")
+        exit(1)
 
-    conn, c = get_db_connection()
+    return (designation_prompt, characters_prompt, notes_prompt, plot_prompt)
 
-    title = datetime.datetime.now().strftime("%Y-%m-%d")
-
-    c.execute("INSERT INTO story (title) VALUES (?)", (title,))
-
-    story_id = c.lastrowid
-    
-    pages = story.split("[PAGE]")
-
-    for i in range(len(pages)):
-        if pages[i] == "":
-            continue
-        c.execute("INSERT INTO story_content (story_id, content) VALUES (?, ?)", (story_id, pages[i]))
-
-    conn.commit()
-    conn.close()
-
-    return story_id
 
 # Generate audio files for story
 def create_audio(story_id, story_dir):
