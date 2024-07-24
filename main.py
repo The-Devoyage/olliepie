@@ -19,12 +19,13 @@ logger = logging.getLogger(__name__)
 @click.option('--new', is_flag=True, help='Generate a new story.')
 @click.option('--prompt', is_flag=True, help='View the current prompts.')
 @click.option('--outline', is_flag=True, help='View the outline for the story.')
-@click.option('--create_videos', type=int, help='Create video clips for a specific story id.')
-@click.option('--create_video', type=int, help='Create a video clip for a specific story content id.')
+@click.option("--update-image", type=int, help="Update the image for a specific story content id.")
+@click.option('--create-videos', type=int, help='Create video clips for a specific story id.')
+@click.option('--create-video', type=int, help='Create a video clip for a specific story content id.')
 @click.option('--stitch', type=int, help='Stitch the video together. Provide the story id as an argument.')
 @click.help_option('-h', '--help')
 
-def main(new, prompt, outline, stitch, create_videos, create_video):
+def main(new, prompt, outline, stitch, create_videos, create_video, update_image):
     logger.info('Generating Story')
 
     if check_env_vars() == False:
@@ -40,6 +41,10 @@ def main(new, prompt, outline, stitch, create_videos, create_video):
     if outline:
         result = create_outline()
         print(result)
+        return
+    if update_image:
+        print("Updating image for story content id", update_image)
+        create_content_image(update_image)
         return
     if stitch:
         print("Stitching video")
@@ -84,7 +89,7 @@ def new_story():
     create_audio(story_id, story_path)
 
     # Get the images
-    create_content_images(story_id, story_path)
+    create_content_images(story_id)
 
     # Create video clips
     create_video_clips(story_id)
@@ -273,7 +278,42 @@ def create_title_image(story_id, story_dir):
     conn.commit()
     conn.close()
 
-def create_content_images(story_id, story_dir):
+def create_content_image(story_content_id):
+    logger.info('Creating Content Image')
+
+    conn, c = get_db_connection()
+
+    c.execute("SELECT image_prompt, story_id FROM story_content WHERE id = ?", (story_content_id,))
+
+    content = c.fetchone()
+    story = c.execute("SELECT title FROM story WHERE id = ?", (content[1],)).fetchone()
+
+    image = None
+
+    attempts = 0
+
+    while not image and attempts < 3:
+        attempts += 1
+        image = generate_image(content[0])
+
+    if not image:
+        # Attempt once more in case we hit the rate limit
+        sleep(60)
+        image = generate_image(content[0])
+        if not image:
+            logger.error(f"Failed to generate image for content {story_content_id}")
+            exit(1)
+
+    output_file = f"stories/{story[0]}/content-img-{story_content_id}.png"
+    image.save(location=output_file, include_generation_parameters=False)
+
+    c.execute("UPDATE story_content SET image_path = ? WHERE id = ?", (output_file, story_content_id))
+
+    conn.commit()
+    conn.close()
+
+
+def create_content_images(story_id):
     logger.info('Generating Content Images')
 
     conn, c = get_db_connection()
@@ -314,27 +354,7 @@ def create_content_images(story_id, story_dir):
         c.execute("UPDATE story_content SET image_prompt = ? WHERE id = ?", (image_prompt, row[0]))
         conn.commit()
 
-        output_file = f"{story_dir}/content-img-{row[0]}.png"
-
-        attempts = 0
-
-        image = None
-
-        while not image and attempts < 3:
-            attempts += 1
-            image = generate_image(image_prompt)
-
-        if not image:
-            # Attempt once more in case we hit the rate limit
-            sleep(60) 
-            image = generate_image(image_prompt)
-            if not image:
-                logger.error(f"Failed to generate image for content {row[0]}")
-                exit(1)
-
-        image.save(location=output_file, include_generation_parameters=False)
-
-        c.execute("UPDATE story_content SET image_path = ? WHERE id = ?", (output_file, row[0]))
+        create_content_image(row[0])
 
     conn.commit()
     conn.close()

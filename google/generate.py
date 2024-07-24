@@ -44,7 +44,7 @@ def generate_audio(text):
         return None
 
 def generate_image(prompt):
-    logger.info(f"Generating image for prompt")
+    logger.info(f"Generating image from prompt")
     project_id = os.getenv('PROJECT_ID')
     vertexai.init(project=project_id, location="us-central1")
     model = ImageGenerationModel.from_pretrained("imagegeneration@006")
