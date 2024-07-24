@@ -9,18 +9,22 @@ from database.utils import get_db_connection
 from utils.parse import check_env_vars, get_config
 from database.execute import insert_story
 import logging
+from time import sleep
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(asctime)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# NOTE: Not used yet, but will be used for a CLI interface
 @click.command()
-@click.option('--new', is_flag=True, help='Generate a new chapter')
-@click.option('--prompt', is_flag=True, help='Generate a new prompt')
+@click.option('--new', is_flag=True, help='Generate a new story.')
+@click.option('--prompt', is_flag=True, help='View the current prompts.')
+@click.option('--outline', is_flag=True, help='View the outline for the story.')
+@click.option('--create_videos', type=int, help='Create video clips for a specific story id.')
+@click.option('--create_video', type=int, help='Create a video clip for a specific story content id.')
+@click.option('--stitch', type=int, help='Stitch the video together. Provide the story id as an argument.')
 @click.help_option('-h', '--help')
 
-def main(new, prompt):
+def main(new, prompt, outline, stitch, create_videos, create_video):
     logger.info('Generating Story')
 
     if check_env_vars() == False:
@@ -32,8 +36,26 @@ def main(new, prompt):
     if prompt:
         result = get_prompts()
         print(result)
+        return
+    if outline:
+        result = create_outline()
+        print(result)
+        return
+    if stitch:
+        print("Stitching video")
+        stitch_video(stitch)
+        return
+    if create_videos:
+        print("Creating video clips")
+        create_video_clips(create_videos)
+        return
+    if create_video:
+        print("Creating video clip")
+        create_video_clip(create_video)
+        return
     else:
         print("Use --help to see available options")
+        return
 
 def new_story():
     # Set the prompt for the generative model
@@ -53,7 +75,7 @@ def new_story():
     story_path = save_story(story)
 
     # Save the story to a database
-    story_id = insert_story(story)
+    story_id = insert_story(story, outline_with_prompt, story_path)
 
     # Generate the title image
     create_title_image(story_id, story_path)
@@ -64,14 +86,17 @@ def new_story():
     # Get the images
     create_content_images(story_id, story_path)
 
+    # Create video clips
+    create_video_clips(story_id)
+
     # Generate the video
-    stitch_video(story_id, story_path)
+    stitch_video(story_id)
 
 # Use AI to create an outline based on the prompts
 def create_outline():
     logger.info('Creating Outline')
     outline = (
-        # Commented out for testing purposes
+        # Comment out for quicker testing 
         # "NO MATTER WHAT, ONLY GENERATE ONE SCENE AS THIS IS A TEST\n"
         "Introduction - 5 - 8 scenes: "
         "The characters are introduced and the setting is established. "
@@ -101,8 +126,6 @@ def create_outline():
     )
     return outline
 
-
-
 def get_prompts():
     logger.info('Getting Prompts')
 
@@ -127,10 +150,15 @@ def get_prompts():
 
     characters_prompt = ""
     characters = config.get("characters")
-    if isinstance(characters, dict):
-        characters_descriptions = characters.get("descriptions")
-        if characters_descriptions:
-            characters_prompt = " ".join(characters_descriptions)
+    if isinstance(characters, list):
+        for character in characters:
+            character_descriptions = character.get("descriptions")
+            if character_descriptions:
+                characters_prompt += " ".join(character_descriptions)
+
+    if not characters_prompt:
+        logger.error("Missing required prompts: characters")
+        exit(1)
 
     notes_prompt = ""
     notes = config.get("notes") 
@@ -138,6 +166,10 @@ def get_prompts():
         notes_descriptions = notes.get("descriptions")
         if notes_descriptions:
             notes = " ".join(notes_descriptions)
+
+    if not characters_prompt and not notes_prompt:
+        logger.error("Missing required prompts: notes")
+        exit(1)
 
 
     plot_prompt = ""
@@ -147,8 +179,8 @@ def get_prompts():
         if plot_descriptions:
             plot_prompt = " ".join(plot_descriptions)
 
-    if not characters_prompt and not notes_prompt and not plot_prompt:
-        logger.error("Missing required prompts")
+    if not plot_prompt:
+        logger.error("Missing required prompts: plot")
         exit(1)
 
     return (designation_prompt, characters_prompt, notes_prompt, plot_prompt)
@@ -156,7 +188,7 @@ def get_prompts():
 
 # Generate audio files for story
 def create_audio(story_id, story_dir):
-    logger.info('Generating Audio for Content')
+    logger.info('Generating Audio for Content for story ', story_id)
 
     conn, c = get_db_connection()
 
@@ -174,12 +206,17 @@ def create_audio(story_id, story_dir):
             response = generate_audio(row[1])
 
         if not response:
-            logger.error(f"Failed to generate audio for content {row[0]}")
-            exit(1)
+            # Attempt once more in case we hit the rate limit
+            sleep(60)
+            response = generate_audio(row[1])
+            if not response:
+                logger.error(f"Failed to generate audio for content {row[0]}")
+                exit(1)
 
         file_name = f"{story_dir}/content-{row[0]}.mp3"
         with open(file_name, "wb") as out:
             out.write(response)
+
         c.execute("UPDATE story_content SET audio_path = ? WHERE id = ?", (file_name, row[0]))
 
     conn.commit()
@@ -198,6 +235,7 @@ def create_title_image(story_id, story_dir):
 
     prompt = (
         "You are an prompt engineer writing a prompt to generate images for a whimsical children's storybook."
+        "The final image prompt should not exceed 128 tokens and should utilize as many of the 128 tokens as possible."
         "Write a prompt to generate an image for the title page of a whimsical children's storybook."
         "The image should capture the essence of the story and be suitable for children aged 2-6 years old."
         "The image should be colorful, engaging, and whimsical."
@@ -206,6 +244,10 @@ def create_title_image(story_id, story_dir):
     )
 
     image_prompt = generate_text(prompt)
+
+    # Save Image Prompt
+    c.execute("UPDATE story SET title_image_prompt = ? WHERE id = ?", (image_prompt, story_id))
+    conn.commit()
 
     image = None
 
@@ -216,8 +258,12 @@ def create_title_image(story_id, story_dir):
         image = generate_image(image_prompt)
 
     if not image:
-        logger.error("Failed to generate image for title page")
-        exit(1)
+        # Attempt once more in case we hit the rate limit
+        sleep(60)
+        image = generate_image(image_prompt)
+        if not image:
+            logger.error("Failed to generate image for title page")
+            exit(1)
 
     output_file = f"{story_dir}/title.png"
     image.save(location=output_file, include_generation_parameters=False)
@@ -243,9 +289,11 @@ def create_content_images(story_id, story_dir):
     for row in rows:
         prompt = (
             "You are an prompt engineer writing a prompt to generate images for a whimsical children's storybook." 
+            "The final image prompt should not exceed 128 tokens and should utilize as many of the 128 tokens as possible."
+            "Do not use markdown, labels, or titles as to avoid exceeding the token limit. Simply create a paragraph."
             "Write a prompt to generate an image for the following scene of a whimiscal children's storybook."
             "The image should be colorful, engaging, and whimsical. The image should be drawn, painted, or illustrated."
-            "Prompt should include Subject, Style, Setting, Background Scene, Foreground Scene, Feeling, and Characters."
+            "Prompt should include Style, Setting, Characters."
             "Use the character context, previous image prompts, and following scene to write the prompt for the image."
             "Explicitly describe each character and scene in verbose detail. Do not summarize or use general terms."
             "Never show people in the image."
@@ -262,7 +310,9 @@ def create_content_images(story_id, story_dir):
             logger.error(f"Failed to generate image prompt for content {row[0]}")
             exit(1)
 
-        print("IMAGE PROMPT IS: ", image_prompt)
+        # Save Image Prompt
+        c.execute("UPDATE story_content SET image_prompt = ? WHERE id = ?", (image_prompt, row[0]))
+        conn.commit()
 
         output_file = f"{story_dir}/content-img-{row[0]}.png"
 
@@ -275,8 +325,12 @@ def create_content_images(story_id, story_dir):
             image = generate_image(image_prompt)
 
         if not image:
-            logger.error(f"Failed to generate image for content {row[0]}")
-            exit(1)
+            # Attempt once more in case we hit the rate limit
+            sleep(60) 
+            image = generate_image(image_prompt)
+            if not image:
+                logger.error(f"Failed to generate image for content {row[0]}")
+                exit(1)
 
         image.save(location=output_file, include_generation_parameters=False)
 
@@ -301,15 +355,47 @@ def save_story(story):
 
     return directory
 
+def create_video_clip(story_content_id):
+    logger.info('Creating Video Clip for story ', story_content_id)
+
+    conn, c = get_db_connection()
+
+    c.execute("SELECT content, audio_path, image_path FROM story_content WHERE id = ?", (story_content_id,))
+    row = c.fetchone()
+
+    audio = AudioFileClip(row[1])
+    image = ImageClip(row[2]).set_duration(audio.duration)
+    video = image.set_audio(audio)
+    clip_path = f"content-video-{story_content_id}.mp4"
+    video.write_videofile(clip_path, codec="libx264", audio_codec="aac", fps=24)
+
+    conn.close()
+
+    return clip_path
+
+def create_video_clips(story_id):
+    logger.info('Creating Video Clips')
+
+    conn, c = get_db_connection()
+
+    c.execute("SELECT id FROM story_content WHERE story_id = ?", (story_id,))
+    rows = c.fetchall()
+
+    for row in rows:
+        create_video_clip(row[0])
+
+    conn.close()
+
+
 # Generate video by stitching together images and audio
-def stitch_video(story_id, path):
+def stitch_video(story_id):
     logger.info('Stitching Video')
 
     # use ffmpeg to stitch together images and audio
     conn, c = get_db_connection()
 
     # Get the title image
-    c.execute("SELECT title_image_path FROM story WHERE id = ?", (story_id,))
+    c.execute("SELECT title_image_path, story_path FROM story WHERE id = ?", (story_id,))
     story = c.fetchone()
 
     # Get all the content for the story
@@ -322,21 +408,17 @@ def stitch_video(story_id, path):
     clips.append(title)
 
     for row in story_contents:
-        audio = AudioFileClip(row[1])
-        image = ImageClip(row[2]).set_duration(audio.duration)
-        video = image.set_audio(audio)
-        clip_path = f"{path}/content-video-{row[0]}.mp4"
-        video.write_videofile(clip_path, codec="libx264", audio_codec="aac", fps=24)
-        clips.append(VideoFileClip(clip_path))
+        clips.append(VideoFileClip(create_video_clip(row[0])))
         transition_clip = ImageClip(row[2]).set_duration(1)
         clips.append(transition_clip)
+
 
     final_clip = concatenate_videoclips(clips)
     background_audio = AudioFileClip("assets/lullaby.mp3")
     background_audio = audio_loop.audio_loop(background_audio, duration=final_clip.duration).volumex(0.075)
     final_audio = CompositeAudioClip([final_clip.audio, background_audio])
     final_clip = final_clip.set_audio(final_audio)
-    final_clip_path = f"{path}/final.mp4"
+    final_clip_path = f"{story[1]}/final.mp4"
     final_clip.write_videofile(final_clip_path, codec="libx264", audio_codec="aac", fps=24)
 
     conn.close()

@@ -48,7 +48,6 @@ def generate_image(prompt):
     project_id = os.getenv('PROJECT_ID')
     vertexai.init(project=project_id, location="us-central1")
     model = ImageGenerationModel.from_pretrained("imagegeneration@006")
-    # model = ImageGenerationModel.from_pretrained("stabilityai_stable-diffusion-2-1-1720235813321")
 
     try:
         images = model.generate_images(
