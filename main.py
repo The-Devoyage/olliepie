@@ -3,13 +3,15 @@ import click
 import os
 from dotenv import load_dotenv
 from google.generate import generate_text, generate_audio, generate_image
-from moviepy.editor import ImageClip, AudioFileClip, VideoFileClip, concatenate_videoclips, CompositeAudioClip
-from moviepy.audio.fx import audio_loop
+# from moviepy.editor import ImageClip, AudioFileClip, VideoFileClip, concatenate_videoclips, CompositeAudioClip
+# from moviepy.audio.fx import audio_loop
+# from moviepy.config import change_settings
 from database.utils import get_db_connection
 from utils.parse import check_env_vars, get_config
 from database.execute import insert_story
 import logging
 from time import sleep
+import math
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(asctime)s - %(name)s - %(message)s')
@@ -20,13 +22,14 @@ logger = logging.getLogger(__name__)
 @click.option('--prompt', is_flag=True, help='View the current prompts.')
 @click.option('--outline', is_flag=True, help='View the outline for the story.')
 @click.option("--update-image", type=int, help="Update the image for a specific story content id.")
+@click.option("--update-audio", type=int, help="Update the audio for a specific story content id.")
 @click.option('--create-videos', type=int, help='Create video clips for a specific story id.')
 @click.option('--create-video', type=int, help='Create a video clip for a specific story content id.')
 @click.option('--stitch', type=int, help='Stitch the video together. Provide the story id as an argument.')
 @click.help_option('-h', '--help')
 
-def main(new, prompt, outline, stitch, create_videos, create_video, update_image):
-    logger.info('Generating Story')
+def main(new, prompt, outline, stitch, create_videos, create_video, update_image, update_audio):
+    logger.info('Olliepie Storybook Generator')
 
     if check_env_vars() == False:
         logger.error("Missing required environment variables")
@@ -58,6 +61,10 @@ def main(new, prompt, outline, stitch, create_videos, create_video, update_image
         print("Creating video clip")
         create_video_clip(create_video)
         return
+    if update_audio:
+        print("Updating audio for story content id", update_audio)
+        create_audio(update_audio)
+        return
     else:
         print("Use --help to see available options")
         return
@@ -86,7 +93,7 @@ def new_story():
     create_title_image(story_id, story_path)
 
     # Get the audio
-    create_audio(story_id, story_path)
+    create_audios(story_id)
 
     # Get the images
     create_content_images(story_id)
@@ -95,7 +102,7 @@ def new_story():
     create_video_clips(story_id)
 
     # Generate the video
-    stitch_video(story_id)
+    stitch_video(story_id, create_videos=True)
 
 # Use AI to create an outline based on the prompts
 def create_outline():
@@ -190,39 +197,53 @@ def get_prompts():
 
     return (designation_prompt, characters_prompt, notes_prompt, plot_prompt)
 
+def create_audio(story_content_id):
+    logger.info("Generating Audio for Story Content")
+    conn, c = get_db_connection()
+    c.execute("SELECT content FROM story_content WHERE id = ?", (story_content_id,))
+    content = c.fetchone()
+
+    c.execute("SELECT story_path FROM story WHERE id = (SELECT story_id FROM story_content WHERE id = ?)", (story_content_id,))
+    story = c.fetchone()
+
+    response = None
+    attempts = 0
+
+    while not response and attempts < 3:
+        attempts += 1
+        response = generate_audio(content[0])
+
+    if not response:
+        # Attempt once more in case we hit the rate limit
+        sleep(60)
+        response = generate_audio(content[0])
+        if not response:
+            logger.error(f"Failed to generate audio for content {story_content_id}")
+            exit(1)
+
+    file_name = f"{story[0]}/content-{story_content_id}.mp3"
+    with open(file_name, "wb") as out:
+        out.write(response)
+
+    c.execute("UPDATE story_content SET audio_path = ? WHERE id = ?", (file_name, story_content_id))
+
+    conn.commit()
+    conn.close()
+
+
 
 # Generate audio files for story
-def create_audio(story_id, story_dir):
-    logger.info('Generating Audio for Content for story ', story_id)
+def create_audios(story_id):
+    logger.info('Generating Audios for Content for story ', story_id)
 
     conn, c = get_db_connection()
 
-    c.execute("SELECT id, content FROM story_content WHERE story_id = ?", (story_id,))
+    c.execute("SELECT id, content FROM story_content WHERE story_id = ? AND id >= 343 AND id <= 347", (story_id,))
 
     rows = c.fetchall()
 
     for row in rows:
-        response = None
-
-        attempts = 0
-
-        while not response and attempts < 3:
-            attempts += 1
-            response = generate_audio(row[1])
-
-        if not response:
-            # Attempt once more in case we hit the rate limit
-            sleep(60)
-            response = generate_audio(row[1])
-            if not response:
-                logger.error(f"Failed to generate audio for content {row[0]}")
-                exit(1)
-
-        file_name = f"{story_dir}/content-{row[0]}.mp3"
-        with open(file_name, "wb") as out:
-            out.write(response)
-
-        c.execute("UPDATE story_content SET audio_path = ? WHERE id = ?", (file_name, row[0]))
+        create_audio(row[0])
 
     conn.commit()
     conn.close()
@@ -375,19 +396,20 @@ def save_story(story):
 
     return directory
 
-def create_video_clip(story_content_id):
-    logger.info('Creating Video Clip for story ', story_content_id)
+def create_video_clip(story_content_id, create_videos=False):
+    logger.info('Creating Video Clip')
 
     conn, c = get_db_connection()
 
     c.execute("SELECT content, audio_path, image_path FROM story_content WHERE id = ?", (story_content_id,))
-    row = c.fetchone()
+    story_content = c.fetchone()
+    c.execute("SELECT story_path FROM story WHERE id = (SELECT story_id FROM story_content WHERE id = ?)", (story_content_id,))
+    story_path = c.fetchone()
 
-    audio = AudioFileClip(row[1])
-    image = ImageClip(row[2]).set_duration(audio.duration)
-    video = image.set_audio(audio)
-    clip_path = f"content-video-{story_content_id}.mp4"
-    video.write_videofile(clip_path, codec="libx264", audio_codec="aac", fps=24)
+    clip_path = f"{story_path[0]}/content-video-{story_content_id}.mp4"
+
+    if create_videos:
+        os.system(f"ffmpeg -loop 1 -i '{story_content[2]}' -i '{story_content[1]}' -c:v libx264 -tune stillimage -c:a aac -b:a 192k -pix_fmt yuv420p -shortest '{clip_path}'")
 
     conn.close()
 
@@ -398,17 +420,17 @@ def create_video_clips(story_id):
 
     conn, c = get_db_connection()
 
-    c.execute("SELECT id FROM story_content WHERE story_id = ?", (story_id,))
-    rows = c.fetchall()
+    c.execute("SELECT id FROM story_content WHERE story_id = ? AND id >= 343 AND id <= 347", (story_id,))
+    contents = c.fetchall()
 
-    for row in rows:
-        create_video_clip(row[0])
+    for row in contents:
+        create_video_clip(row[0], create_videos=True)
 
     conn.close()
 
 
 # Generate video by stitching together images and audio
-def stitch_video(story_id):
+def stitch_video(story_id, create_videos=False):
     logger.info('Stitching Video')
 
     # use ffmpeg to stitch together images and audio
@@ -419,27 +441,41 @@ def stitch_video(story_id):
     story = c.fetchone()
 
     # Get all the content for the story
-    c.execute("SELECT id, audio_path, image_path FROM story_content WHERE story_id = ?", (story_id,))
+    c.execute("SELECT id, audio_path, image_path FROM story_content WHERE story_id = ? AND id >= 343 AND id <= 347", (story_id,))
     story_contents = c.fetchall()
 
     clips = []
 
-    title = ImageClip(story[0]).set_duration(5)
-    clips.append(title)
+    title_clip = f"{story[1]}/title.mp4"
+    #TODO: This does not work
+    os.system(f"ffmpeg -loop 1 -i '{story[0]}' -c:v libx264 -pix_fmt yuv420p -t 3 '{title_clip}'")
+    clips.append(title_clip)
 
     for row in story_contents:
-        clips.append(VideoFileClip(create_video_clip(row[0])))
-        transition_clip = ImageClip(row[2]).set_duration(1)
-        clips.append(transition_clip)
+        clips.append(create_video_clip(row[0], create_videos))
+        # transition_clip = ImageClip(row[2]).set_duration(1)
+        # clips.append(transition_clip)
 
+    # final_clip = concatenate_videoclips(clips)
+    # background_audio = AudioFileClip("assets/lullaby.mp3")
+    # background_audio = audio_loop.audio_loop(background_audio, duration=final_clip.duration).volumex(0.075)
+    # final_audio = CompositeAudioClip([final_clip.audio, background_audio])
+    # final_clip = final_clip.set_audio(final_audio)
+    # final_clip_path = f"{story[1]}/final.mp4"
+    # final_clip.write_videofile(final_clip_path, codec="libx264", audio_codec="aac", fps=24)
 
-    final_clip = concatenate_videoclips(clips)
-    background_audio = AudioFileClip("assets/lullaby.mp3")
-    background_audio = audio_loop.audio_loop(background_audio, duration=final_clip.duration).volumex(0.075)
-    final_audio = CompositeAudioClip([final_clip.audio, background_audio])
-    final_clip = final_clip.set_audio(final_audio)
-    final_clip_path = f"{story[1]}/final.mp4"
-    final_clip.write_videofile(final_clip_path, codec="libx264", audio_codec="aac", fps=24)
+    print("CLIPS", clips)
+    final_clip_path = f"'{story[1]}'/final.mp4"
+    os.system(f"rm -f temp.txt")
+    clips_str = ""
+    for clip in clips:
+        clips_str += f"file {clip}\n"
+    with open("temp.txt", "w") as f:
+        f.write(clips_str)
+
+    print("CLIPS", clips_str)
+    os.system(f"ffmpeg -f concat -safe 0 -i temp.txt -c:v libx264 -c:a aac -map 1:a '{final_clip_path}'")
+
 
     conn.close()
 
