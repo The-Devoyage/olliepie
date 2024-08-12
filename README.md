@@ -89,7 +89,7 @@ Recreates a single video based on the provided `story_content` id. Useful to rec
 
 Recreates all of the videos for the entire story. Useful if you have chosen to update multiple audio/images.
 
-### `--help
+### `--help`
 
 View all the commands and functionality.
 
