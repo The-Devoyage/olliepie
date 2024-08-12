@@ -465,7 +465,7 @@ def stitch_video(story_id, create_videos=False):
 
     title_image = ImageClip(story[0]).set_duration(3)
     story_clip = VideoFileClip(pre_clip_path)
-    final_clip = concatenate_videoclips([title_image, story_clip])
+    final_clip = concatenate_videoclips([title_image, story_clip, title_image])
     background_audio = audio_loop.audio_loop(AudioFileClip("assets/lullaby.mp3"), duration=final_clip.duration).volumex(0.075)
     final_audio = CompositeAudioClip([final_clip.audio, background_audio])
     final_clip = final_clip.set_audio(final_audio)
